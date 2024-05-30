@@ -2306,15 +2306,12 @@ function interface_configure($verbose = false, $interface = 'wan', $reload = fal
      *    already does that so at this point try to be more consistent.
      */
     $interface_descr = sprintf('%s (%s)', !empty($wancfg['descr']) ? $wancfg['descr'] : strtoupper($interface), $interface);
+    /* XXX we should maybe set "ifdisabled" but it could be dangerous for assigned tunnel devices */
     mwexecf('/sbin/ifconfig %s inet6 -accept_rtadv -no_dad description %s up', [$realif, $interface_descr]);
 
-    switch ($wancfg['ipaddrv6'] ?? 'none') {
+    switch (isset($config['system']['ipv6allow']) ? ($wancfg['ipaddrv6'] ?? 'none') : 'none') {
         case 'slaac':
         case 'dhcp6':
-            /* XXX move these to tunables maybe as they are global anyway */
-            set_single_sysctl('net.inet6.ip6.accept_rtadv', '1');
-            set_single_sysctl('net.inet6.ip6.rfc6204w3', '1');
-
             mwexecf('/sbin/ifconfig %s inet6 accept_rtadv -ifdisabled up', $realifv6);
 
             if (!isset($wancfg['dhcp6usev4iface'])) {
@@ -2858,6 +2855,10 @@ if [ -z "\${1}" ]; then
     echo "Nothing to do."
     exit 0
 fi
+if grep -q "^interface \${1} " /var/etc/radvd.conf; then
+       echo "Rejecting own configuration."
+       exit 0
+fi
 if [ -n "\${2}" ]; then
     # Note that the router file can be written by ppp-linkup.sh or
     # this script so do not clear the file as it may already exist.
@@ -2916,12 +2917,24 @@ function DHCP6_Config_File_Basic($interface, $wancfg, $wanif, $id = 0)
                 $preflen = 64 - $wancfg['dhcp6-ia-pd-len'];
                 $dhcp6cconf .= "  prefix ::/{$preflen} infinity;\n";
             }
+            if (isset($wancfg['dhcp6-prefix-id']) && is_numeric($wancfg['dhcp6-prefix-id'])) {
+                $dhcp6cconf .= "  prefix-interface {$wanif} {\n";
+                $dhcp6cconf .= "    sla-id {$wancfg['dhcp6-prefix-id']};\n";
+                $dhcp6cconf .= "    sla-len {$wancfg['dhcp6-ia-pd-len']};\n";
+                if (isset($wancfg['dhcp6_ifid'])) {
+                    $dhcp6cconf .= "    ifid {$wancfg['dhcp6_ifid']};\n";
+                }
+                $dhcp6cconf .= "  };\n";
+            }
             foreach (link_interface_to_track6($interface) as $friendly => $lancfg) {
                 if (is_numeric($lancfg['track6-prefix-id'])) {
                     $trackifv6 = get_real_interface($friendly, 'inet6');
                     $dhcp6cconf .= "  prefix-interface {$trackifv6} {\n";
                     $dhcp6cconf .= "    sla-id {$lancfg['track6-prefix-id']};\n";
                     $dhcp6cconf .= "    sla-len {$wancfg['dhcp6-ia-pd-len']};\n";
+                    if (isset($lancfg['track6_ifid'])) {
+                        $dhcp6cconf .= "    ifid {$lancfg['track6_ifid']};\n";
+                    }
                     $dhcp6cconf .= "  };\n";
                 }
             }
@@ -3025,6 +3038,21 @@ function DHCP6_Config_File_Advanced($interface, $wancfg, $wanif, $id = 0)
             $id_assoc_statement_prefix .= ";\n";
         }
 
+        if (isset($wancfg['dhcp6-prefix-id']) && is_numeric($wancfg['dhcp6-prefix-id'])) {
+            $id_assoc_statement_prefix .= "  prefix-interface {$wanif} {\n";
+            $id_assoc_statement_prefix .= "    sla-id {$wancfg['dhcp6-prefix-id']};\n";
+            if (
+                ($wancfg['adv_dhcp6_prefix_interface_statement_sla_len'] >= 0) &&
+                ($wancfg['adv_dhcp6_prefix_interface_statement_sla_len'] <= 128)
+            ) {
+                $id_assoc_statement_prefix .= "    sla-len {$wancfg['adv_dhcp6_prefix_interface_statement_sla_len']};\n";
+            }
+            if (isset($wancfg['dhcp6_ifid'])) {
+                $id_assoc_statement_prefix .= "    ifid {$wancfg['dhcp6_ifid']};\n";
+            }
+            $id_assoc_statement_prefix .= "  };\n";
+        }
+
         foreach (link_interface_to_track6($interface) as $friendly => $lancfg) {
             if (is_numeric($lancfg['track6-prefix-id'])) {
                 $trackifv6 = get_real_interface($friendly, 'inet6');
@@ -3035,6 +3063,9 @@ function DHCP6_Config_File_Advanced($interface, $wancfg, $wanif, $id = 0)
                     ($wancfg['adv_dhcp6_prefix_interface_statement_sla_len'] <= 128)
                 ) {
                     $id_assoc_statement_prefix .= "    sla-len {$wancfg['adv_dhcp6_prefix_interface_statement_sla_len']};\n";
+                }
+                if (isset($lancfg['track6_ifid'])) {
+                    $id_assoc_statement_prefix .= "    ifid {$lancfg['track6_ifid']};\n";
                 }
                 $id_assoc_statement_prefix .= "  };\n";
             }
@@ -4107,8 +4138,10 @@ function interfaces_has_prefix_only($interface)
         case 'dhcp6':
             $ret = empty($interfaces_a[$interface]['adv_dhcp6_config_file_override']) &&
                 ((!empty($interfaces_a[$interface]['adv_dhcp6_config_advanced']) &&
-                empty($interfaces_a[$interface]['adv_dhcp6_id_assoc_statement_address_enable'])) ||
-                isset($interfaces_a[$interface]['dhcp6prefixonly']));
+                empty($interfaces_a[$interface]['adv_dhcp6_id_assoc_statement_address_enable']) &&
+                !isset($interfaces_a[$interface]['dhcp6-prefix-id'])) ||
+                (isset($interfaces_a[$interface]['dhcp6prefixonly']) &&
+                !isset($interfaces_a[$interface]['dhcp6-prefix-id'])));
             break;
         default:
             break;
