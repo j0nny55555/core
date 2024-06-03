@@ -781,8 +781,11 @@ function system_routing_configure($verbose = false, $interface = null, $monitor 
             }
 
             foreach ($reloads as $reload) {
-                plugins_configure('monitor', $verbose, [$reload]);
+                //plugins_configure('monitor', $verbose, [$reload]);
+                log_msg(sprintf('ROUTING: debugging monitor restart for "%s"', $name), LOG_ERR);
             }
+            // restart all just to see if we can unwedge automatically
+            plugins_configure('monitor', $verbose);
         } else {
             plugins_configure('monitor', $verbose);
         }
