@@ -1,0 +1,17 @@
+<form>
+    <tab id="ipsec-general" description="General">
+        <field>
+            <id>ipsec.general.enabled</id>
+            <label>enabled</label>
+            <type>checkbox</type>
+        </field>
+    </tab>
+    <tab id="ipsec-syslog" description="Syslog">
+        <field>
+            <id>ipsec.syslog.test</id>
+            <label>test</label>
+            <type>checkbox</type>
+        </field>
+    </tab>
+    <activetab>ipsec-general</activetab>
+</form>
